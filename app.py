@@ -2,32 +2,32 @@ import os
 import time
 import requests
 import logging
+import threading
 from PIL import Image
 from instagrapi import Client
 from groq import Groq
+from flask import Flask
 
-# Logging Ayarları
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Render Environment Variables üzerinden bilgileri alıyoruz
+app = Flask(__name__)
+
 INSTAGRAM_USERNAME = os.getenv("INSTAGRAM_USERNAME")
 INSTAGRAM_PASSWORD = os.getenv("INSTAGRAM_PASSWORD")
-# Senin Render'da yazdığın isme (NEWS_API_KEY) göre güncelledim:
-NEWSDATA_API_KEY = os.getenv("NEWS_API_KEY") 
+NEWSDATA_API_KEY = os.getenv("NEWS_API_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-# API İstemcileri
 cl = Client()
 groq_client = Groq(api_key=GROQ_API_KEY)
+
+@app.route('/')
+def health_check():
+    return "Bot is active", 200
 
 def init_instagram():
     try:
         if not cl.user_id:
-            if os.path.exists("session.json"):
-                logger.info("Session dosyası bulundu, oturum yükleniyor...")
-                cl.load_settings("session.json")
-            
             logger.info("Instagram girişi yapılıyor...")
             cl.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
             logger.info("Instagram girişi başarılı!")
@@ -92,8 +92,16 @@ def job():
     else:
         logger.warning("Yeni haber bulunamadı.")
 
-if __name__ == "__main__":
+def run_bot_loop():
     while True:
         job()
         logger.info("4 saat bekleniyor...")
         time.sleep(14400)
+
+if __name__ == "__main__":
+    bot_thread = threading.Thread(target=run_bot_loop)
+    bot_thread.daemon = True
+    bot_thread.start()
+    
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)
