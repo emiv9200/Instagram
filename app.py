@@ -4,10 +4,11 @@ import requests
 import logging
 import threading
 import re
+import json
 from PIL import Image
 from instagrapi import Client
 from groq import Groq
-from flask import Flask
+from flask import Flask, request
 from datetime import datetime
 import pytz
 
@@ -17,8 +18,8 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# Panel durum değişkenleri
-instagram_status = "Başlatılmadı"
+# Değişkenler
+instagram_status = "Beklemede..."
 last_update = "Henüz işlem yapılmadı"
 
 # Render Environment Variables
@@ -26,11 +27,24 @@ INSTAGRAM_USERNAME = os.getenv("INSTAGRAM_USERNAME")
 INSTAGRAM_PASSWORD = os.getenv("INSTAGRAM_PASSWORD")
 NEWSDATA_API_KEY = os.getenv("NEWS_API_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+SECRET_KEY = os.getenv("SECRET_KEY", "benim_ozel_sifrem_123") # Render'dan ayarlamayı unutma!
 
 cl = Client()
 groq_client = Groq(api_key=GROQ_API_KEY)
 
-# --- TEMİZLEME FONKSİYONLARI (Artık app.py içinde, hata vermez) ---
+# Sabit Cihaz Bilgisi (Instagram Banını Önlemek İçin Şart)
+DEVICE_SETTINGS = {
+    "app_version": "269.0.0.18.75",
+    "android_version": 30,
+    "android_release": "11.0",
+    "dpi": "440dpi",
+    "resolution": "1080x2340",
+    "manufacturer": "OnePlus",
+    "device": "6T",
+    "model": "ONEPLUS A6010",
+    "cpu": "qcom"
+}
+
 def remove_html_tags(text):
     if not text: return ""
     clean = re.sub(r'<[^>]+>', '', text)
@@ -41,127 +55,128 @@ def truncate_text(text, max_length=400):
     if not text or len(text) <= max_length: return text
     return text[:max_length].rsplit(" ", 1)[0] + "..."
 
-# --- WEB PANEL YOLLARI ---
-@app.route('/')
-def health_check():
-    return f"""
-    <html>
-        <head><title>Bot Durum Paneli</title></head>
-        <body style="font-family: Arial, sans-serif; padding: 20px; line-height: 1.6;">
-            <h1 style="color: #333;">Bot Durum Paneli</h1>
-            <p><strong>Bot Durumu:</strong> Aktif ✅</p>
-            <p><strong>Instagram Durumu:</strong> {instagram_status}</p>
-            <p><strong>Son İşlem Zamanı:</strong> {last_update}</p>
-            <hr>
-            <a href="/test-run" style="display: inline-block; padding: 12px 20px; background: #28a745; color: white; text-decoration: none; border-radius: 5px; font-weight: bold;">Hemen Test Et (Manuel Çalıştır)</a>
-            <p><small style="color: #666;">Not: Tıkladıktan sonra 15 saniye bekleyip sayfayı yenileyin.</small></p>
-        </body>
-    </html>
-    """, 200
-
-@app.route('/test-run')
-def test_run():
-    thread = threading.Thread(target=job)
-    thread.start()
-    return "Bot tetiklendi! Panelden durumu takip edin.", 200
-
-# --- BOT MANTIĞI ---
+# --- INSTAGRAM GİRİŞ ---
 def init_instagram():
     global instagram_status
     try:
-        session_file = "session.json"
-        if os.path.exists(session_file):
-            logger.info("Session dosyası yükleniyor...")
-            cl.load_settings(session_file)
-            try:
-                cl.get_timeline_feed() 
-                instagram_status = "Bağlı (Session) ✅"
-                return
-            except Exception:
-                logger.warning("Session geçersiz.")
-
-        if not cl.user_id:
-            logger.info("Giriş denemesi yapılıyor...")
-            cl.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
-            cl.dump_settings(session_file)
-            instagram_status = "Bağlı (Yeni Giriş) ✅"
+        cl.set_device(DEVICE_SETTINGS)
+        logger.info("Instagram'a giriş yapılıyor...")
+        cl.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
+        instagram_status = "Bağlı ✅"
     except Exception as e:
-        error_msg = str(e)
-        instagram_status = f"Hata: {error_msg[:60]}... ❌"
-        logger.error(f"Instagram giriş hatası: {e}")
+        instagram_status = f"Giriş Hatası: {str(e)[:50]} ❌"
+        logger.error(f"Instagram Login Hatası: {e}")
 
+# --- HABER ÇEKME ---
 def get_latest_news():
     url = f"https://newsdata.io/api/1/news?apikey={NEWSDATA_API_KEY}&q=haber&country=tr&language=tr"
     try:
         response = requests.get(url, timeout=15)
         data = response.json()
         if data.get("status") == "success" and data.get("results"):
-            return data["results"][0]
+            # Görseli olan ilk haberi bul
+            for news in data["results"]:
+                if news.get("image_url"):
+                    return news
     except Exception as e:
         logger.error(f"Haber çekme hatası: {e}")
     return None
 
+# --- GÖRSEL HAZIRLAMA ---
 def create_instagram_post(news_item):
     img_url = news_item.get("image_url")
-    if not img_url: return None
     img_path = "news_image.jpg"
     final_path = "final_post.jpg"
     try:
         r = requests.get(img_url, timeout=15)
         with open(img_path, "wb") as f:
             f.write(r.content)
+        
         img = Image.open(img_path).convert("RGB")
-        img = img.resize((1080, 1350))
+        img = img.resize((1080, 1350)) # Instagram Portrait Mode
+        
         if os.path.exists("logo.png"):
             logo = Image.open("logo.png").convert("RGBA")
-            logo.thumbnail((200, 200))
+            logo.thumbnail((150, 150))
             img.paste(logo, (50, 50), logo)
+            
         img.save(final_path, "JPEG", quality=95)
         return final_path
     except Exception as e:
-        logger.error(f"Görsel oluşturma hatası: {e}")
+        logger.error(f"Görsel işleme hatası: {e}")
         return None
 
+# --- AI AÇIKLAMA ---
 def generate_ai_caption(title, description):
     try:
         clean_title = remove_html_tags(title)
-        clean_desc = truncate_text(remove_html_tags(description or ""), 400)
-        prompt = f"Haber: {clean_title}\nDetay: {clean_desc}\nInstagram için kısa, etkileyici ve emojili açıklama yaz."
+        clean_desc = truncate_text(remove_html_tags(description or ""), 300)
+        prompt = f"Haber Başlığı: {clean_title}\nİçerik: {clean_desc}\n\nBu haberi Instagram'da paylaşacağım. Dikkat çekici, kısa bir açıklama yaz ve uygun hashtagler ekle."
+        
         chat_completion = groq_client.chat.completions.create(
             messages=[{"role": "user", "content": prompt}],
             model="llama3-70b-8192",
         )
         return chat_completion.choices[0].message.content
     except Exception:
-        return f"{title}\n\nTakipte kalın! #haber"
+        return f"🚨 {title}\n\nDetaylar biyografide! #haber #sondakika"
 
+# --- ANA GÖREV ---
 def job():
-    global last_update
+    global last_update, instagram_status
     tz = pytz.timezone('Europe/Istanbul')
-    last_update = datetime.now(tz).strftime('%H:%M:%S')
+    last_update = datetime.now(tz).strftime('%d/%m/%Y %H:%M:%S')
     
+    logger.info("Süreç başladı...")
     news = get_latest_news()
-    if news:
-        init_instagram()
-        if "Bağlı" in instagram_status:
-            image_path = create_instagram_post(news)
-            if image_path:
-                caption = generate_ai_caption(news['title'], news.get('description', ''))
-                try:
-                    cl.photo_upload(image_path, caption)
-                    logger.info("Paylaşım başarılı!")
-                except Exception as e:
-                    logger.error(f"Paylaşım hatası: {e}")
+    
+    if not news:
+        logger.warning("Paylaşılacak yeni haber bulunamadı.")
+        return
 
-def run_bot_loop():
-    while True:
-        job()
-        time.sleep(14400) # 4 saat
+    init_instagram()
+    
+    if "Bağlı" in instagram_status:
+        image_path = create_instagram_post(news)
+        if image_path:
+            caption = generate_ai_caption(news['title'], news.get('description', ''))
+            try:
+                cl.photo_upload(image_path, caption)
+                logger.info("Paylaşım Instagram'a gönderildi!")
+                instagram_status = "Son Paylaşım Başarılı ✅"
+            except Exception as e:
+                logger.error(f"Upload hatası: {e}")
+                instagram_status = "Paylaşım Hatası ❌"
+        else:
+            logger.error("Görsel hazırlanamadığı için iptal edildi.")
+
+# --- WEB PANEL VE TETİKLEYİCİ ---
+@app.route('/')
+def home():
+    return f"""
+    <html>
+        <body style="font-family:sans-serif; text-align:center; padding:50px;">
+            <h1>Haber Botu Kontrol Paneli</h1>
+            <p><strong>Durum:</strong> {instagram_status}</p>
+            <p><strong>Son İşlem:</strong> {last_update}</p>
+            <hr>
+            <p>Tetikleme Linkini Telefonuna Kaydet!</p>
+        </body>
+    </html>
+    """
+
+@app.route('/run')
+def manual_run():
+    key = request.args.get('key')
+    if key != SECRET_KEY:
+        return "Hatalı Şifre!", 403
+    
+    # Render'da request süresi dolmadan işi başlatmak için Thread kullanıyoruz
+    thread = threading.Thread(target=job)
+    thread.start()
+    return "Bot uyanıyor, haber paylaşım işlemi başlatıldı... 1 dakika içinde kontrol edin.", 200
 
 if __name__ == "__main__":
-    bot_thread = threading.Thread(target=run_bot_loop)
-    bot_thread.daemon = True
-    bot_thread.start()
-    
+    # Render PORT ayarı
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
