@@ -56,29 +56,27 @@ def truncate_text(text, max_length=400):
     if not text or len(text) <= max_length: return text
     return text[:max_length].rsplit(" ", 1)[0] + "..."
 
-# --- INSTAGRAM GİRİŞ (Hata Giderilmiş Versiyon) ---
+# --- INSTAGRAM GİRİŞ (HATA GİDERİLDİ) ---
 def init_instagram():
     global instagram_status
     try:
         cl.set_device(DEVICE_SETTINGS)
         if SESSION_DATA:
             logger.info("SESSION_DATA kullanılarak oturum açılıyor...")
-            # JSON verisini yükle
-            session_dict = json.loads(SESSION_DATA)
-            # instagrapi'nin beklediği ayarları set et
-            cl.set_settings(session_dict)
+            # Oturumu ayarlar (settings) olarak yükle
+            session_settings = json.loads(SESSION_DATA)
+            cl.set_settings(session_settings)
             
-            # Oturumun geçerliliğini test et
+            # Oturumun gerçekten çalışıp çalışmadığını küçük bir istekle test et
             try:
-                cl.get_timeline_feed() 
+                cl.get_timeline_feed()
                 instagram_status = "Bağlı (Oturum Onaylı) ✅"
-                logger.info("Oturum başarıyla doğrulandı.")
-            except:
-                logger.warning("Oturum geçersiz veya süresi dolmuş, normal giriş deneniyor...")
+                logger.info("Instagram oturumu başarıyla doğrulandı.")
+            except Exception as session_err:
+                logger.warning(f"Oturum geçersiz, normal giriş deneniyor: {session_err}")
                 cl.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
                 instagram_status = "Bağlı ✅"
         else:
-            logger.warning("SESSION_DATA bulunamadı, normal şifre ile giriş deneniyor...")
             cl.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
             instagram_status = "Bağlı ✅"
     except Exception as e:
@@ -159,7 +157,7 @@ def job():
             caption = generate_ai_caption(news['title'], news.get('description', ''))
             try:
                 cl.photo_upload(image_path, caption)
-                logger.info("Paylaşım Instagram'a gönderildi!")
+                logger.info("Paylaşım Instagram'a başarıyla gönderildi!")
                 instagram_status = "Son Paylaşım Başarılı ✅"
             except Exception as e:
                 logger.error(f"Upload hatası: {e}")
