@@ -33,7 +33,7 @@ SESSION_DATA = os.getenv("SESSION_DATA")
 cl = Client()
 groq_client = Groq(api_key=GROQ_API_KEY)
 
-# Sabit Cihaz Bilgisi (Senin Session verilerinle uyumlu)
+# Sabit Cihaz Bilgisi
 DEVICE_SETTINGS = {
     "app_version": "269.0.0.18.75",
     "android_version": 29,
@@ -56,18 +56,29 @@ def truncate_text(text, max_length=400):
     if not text or len(text) <= max_length: return text
     return text[:max_length].rsplit(" ", 1)[0] + "..."
 
-# --- INSTAGRAM GİRİŞ (Düzeltilmiş Kesin Çözüm) ---
+# --- INSTAGRAM GİRİŞ (Hata Giderilmiş Versiyon) ---
 def init_instagram():
     global instagram_status
     try:
         cl.set_device(DEVICE_SETTINGS)
-        # SESSION_DATA varsa kod sormadan direkt giriş yapar
         if SESSION_DATA:
             logger.info("SESSION_DATA kullanılarak oturum açılıyor...")
-            cl.set_settings(json.loads(SESSION_DATA))
-            instagram_status = "Bağlı (Oturum Onaylı) ✅"
+            # JSON verisini yükle
+            session_dict = json.loads(SESSION_DATA)
+            # instagrapi'nin beklediği ayarları set et
+            cl.set_settings(session_dict)
+            
+            # Oturumun geçerliliğini test et
+            try:
+                cl.get_timeline_feed() 
+                instagram_status = "Bağlı (Oturum Onaylı) ✅"
+                logger.info("Oturum başarıyla doğrulandı.")
+            except:
+                logger.warning("Oturum geçersiz veya süresi dolmuş, normal giriş deneniyor...")
+                cl.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
+                instagram_status = "Bağlı ✅"
         else:
-            logger.warning("SESSION_DATA bulunamadı, normal giriş deneniyor...")
+            logger.warning("SESSION_DATA bulunamadı, normal şifre ile giriş deneniyor...")
             cl.login(INSTAGRAM_USERNAME, INSTAGRAM_PASSWORD)
             instagram_status = "Bağlı ✅"
     except Exception as e:
